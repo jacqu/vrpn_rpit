@@ -1,0 +1,5 @@
+
+*.o
+*.a
+pc_linux/.depend
+client_src/pc_linux/vrpn_print_devices
