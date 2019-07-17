@@ -142,13 +142,16 @@ $(OBJ_DIR)/%.o: %.cpp
 	@[ -d $(OBJ_DIR) ] || mkdir -p $(OBJ_DIR)
 	$(CC) $(CXXFLAGS) -o $@ -c $<
 
-INSTALL_APPS := vrpn_print_devices 
+INSTALL_APPS := vrpn_print_devices vrpn_rpit_server
 
 APPS := $(INSTALL_APPS) 
 
 all:	$(APPS)
 
 # $(OBJ_DIR)/ohm_client
+
+.PHONY:	vrpn_rpit_server
+vrpn_rpit_server:	$(OBJ_DIR)/vrpn_rpit_server
 
 .PHONY:	vrpn_print_devices
 vrpn_print_devices:	$(OBJ_DIR)/vrpn_print_devices
@@ -206,6 +209,10 @@ c_interface_example:	$(OBJ_DIR)/c_interface_example
 
 .PHONY:	text
 text:	$(OBJ_DIR)/text
+
+$(OBJ_DIR)/vrpn_rpit_server: $(OBJ_DIR)/vrpn_rpit_server.o $(LIB_DIR)/libvrpn.a
+	$(CC) $(LFLAGS) -o $(OBJ_DIR)/vrpn_rpit_server \
+		$(OBJ_DIR)/vrpn_rpit_server.o -lvrpn $(ARCH_LIBS)
 
 $(OBJ_DIR)/sound_client: $(OBJ_DIR)/sound_client.o $(LIB_DIR)/libvrpn.a
 	$(CC) $(LFLAGS) -o $(OBJ_DIR)/sound_client \
