@@ -26,22 +26,23 @@
 #endif
 #include <vrpn_Connection.h>
 
-// Defines
-#define VRPN_SERVER_IP          "192.168.10.1"
-#define VRPN_TARGET_NAME        "wiimote"
-#define VRPN_TRACKER_TYPE       "vrpn_Tracker Pos_Quat"
-#define VRPN_MSG_LEN            8
-#define VRPN_TRANS_LEN          3
-#define VRPN_ROT_LEN            4
+// Defines for VRPN server
+#define VRPN_SERVER_IP              "192.168.10.1"
+#define VRPN_TARGET_NAME            "wiimote"
+#define VRPN_TRACKER_TYPE           "vrpn_Tracker Pos_Quat"
+#define VRPN_MSG_LEN                8
+#define VRPN_TRANS_LEN              3
+#define VRPN_ROT_LEN                4
 
-/* Check that these definitions are identical in client code */
-
+// Check that these definitions are identical in client code
 #define RPIT_SOCKET_CON_N           10        // Nb of double sent (control)
 #define RPIT_SOCKET_MES_N           10        // Nb of double returned (measurement)
 #define RPIT_SOCKET_PORT            "31415"   // Port of the server
 #define RPIT_SOCKET_MES_PERIOD      2000      // Sampling period of the measurement (us)
 #define RPIT_SOCKET_MAGIC           3141592   // Magic number
 #define RPIT_SOCKET_WATCHDOG_TRIG   1000000   // Delay in us before watchdog is triggered
+
+using namespace std;
 
 struct RPIt_socket_mes_struct  {
   unsigned int        magic;                  // Magic number
@@ -85,98 +86,87 @@ void rpit_socket_get_time( struct timespec *ts )  {
 }
 
 /*
- *  Measurement thread. Runs asynchronously at a higher rate.
- *  It is possible to implement signal filtering here.
+ *  VRPN stream packet handler
+ */
+int rpit_vrpn_handler( void *userdata, vrpn_HANDLERPARAM p ) {
+  int                       i;
+  const char                *param = (p.buffer);
+  vrpn_float64              pos[VRPN_TRANS_LEN], 
+                            quat[VRPN_ROT_LEN];
+  static char               first_flag = 1;
+  static unsigned long long first_time;
+  unsigned long long        usec =  p.msg_time.tv_sec * 1e6 + 
+                                    p.msg_time.tv_usec;
+
+  if ( first_flag )  {  
+         first_time = usec;
+         first_flag = 0;
+    }
+  
+  // Timestamp in us
+  unsigned long long        timestamp = usec - first_time;
+
+  // Check for errors
+  if ( p.payload_len != ( VRPN_MSG_LEN * sizeof( vrpn_float64 ) ) ) {
+    flockfile( stderr );
+    fprintf(stderr,"vrpn_Tracker: change message payload error\n");
+    fprintf(stderr,"             (got %d, expected %lud)\n",
+      p.payload_len, 
+      static_cast<unsigned long>( VRPN_MSG_LEN * sizeof(vrpn_float64) ) );
+    funlockfile( stderr );
+    return -1;
+  }
+
+  // Extract data
+  
+  // Enter critical section
+  pthread_mutex_lock( &mes_mutex );
+  
+  // Define magic number
+  mes.magic = RPIT_SOCKET_MAGIC;
+  
+  // Acquire server timestamp
+  mes.timestamp = timestamp;
+  
+  // Acquire measurements
+  for ( i = 0; i < VRPN_TRANS_LEN; i++ )
+    mes.mes[i] = 
+      ntohd( *( (vrpn_float64*)( param+((1+i)*sizeof(vrpn_float64)) ) ) );
+
+  for ( i = 0; i < VRPN_ROT_LEN; i++ ) {
+    mes.mes[i+VRPN_TRANS_LEN] = 
+      ntohd( *( (vrpn_float64*)( param+((4+i)*sizeof(vrpn_float64)) ) ) );
+  }
+  
+  // Exit critical section
+  pthread_mutex_unlock( &mes_mutex );
+
+  // Display pose
+  flockfile( stderr );
+  fprintf( stderr, 
+    "Tracker : time us (%lli) pos (%lf,%lf,%lf) quat (%lf,%lf,%lf,%lf)\n",
+    timestamp, 
+    pos[0], pos[1], pos[2],
+    quat[0], quat[1], quat[2], quat[3] );
+  funlockfile( stderr );
+  
+  return 0;
+}
+
+/*
+ *  VRPN mainloop thread. 
  */
 void *rpit_socket_server_update( void *ptr )  {
-  struct timespec     current_time, last_time;
-  unsigned long long  period;
-  int                  i;
-  unsigned long long  watchdog_counter = 0;
-  unsigned long long  last_timestamp = 0;
-  
-  
-  rpit_socket_get_time( &last_time );
-  mes.magic = RPIT_SOCKET_MAGIC;
   
   while( 1 )  {
     
-    /* Check if exit is requested */
-    
+    // Check if exit is requested
     if ( exit_req )
       break;
       
-    /* Sleep to synchronize acquisition (adapt to your case) */
-  
-    usleep( RPIT_SOCKET_MES_PERIOD );
-    
-    /* Get current time */
-    
-    rpit_socket_get_time( &current_time );
-    
-    /* Critical section */
-    
-    pthread_mutex_lock( &mes_mutex );  
-    
-    mes.timestamp = (unsigned long long)current_time.tv_sec * 1000000000
-                  + (unsigned long long)current_time.tv_nsec;
-    
-    /* 
-     * 
-     * 
-     * Insert the measurements acquisition code here.
-     * This code can used control signals safely:
-     * they are protected by a mutex.
-     * 
-     * 
-     * 
-     */
-    
-    
-    
-    
-    
-    
-    
-    
-    /**********************************************/
-    
-    /* Fake measurements for test only (mes = con). Comment this out. */
-    
-    for( i = 0; ( i < RPIT_SOCKET_MES_N ) || ( i < RPIT_SOCKET_CON_N ); i++ )
-      mes.mes[i] = con.con[i];
-    
-    /* Whatchdog: if control signals are not updated, force them to 0 */
-    
-    if ( last_timestamp == con.timestamp )
-      watchdog_counter++;
-    else
-      watchdog_counter = 0;
-    
-    last_timestamp = con.timestamp;
-    
-    if ( watchdog_counter >= ( RPIT_SOCKET_WATCHDOG_TRIG / RPIT_SOCKET_MES_PERIOD ) )  {
+    // Call to vrpn main loop
+    connection->mainloop( );
       
-      flockfile( stderr );
-      fprintf( stderr, "rpit_socket_server_update: watchdog triggered (%ds).\n",
-                        (int)( ( watchdog_counter * RPIT_SOCKET_MES_PERIOD ) / 1000000 ) );
-      funlockfile( stderr );
-      
-      for( i = 0; i < RPIT_SOCKET_CON_N; i++ )
-        con.con[i] = 0.0;
-    }
-  
-    pthread_mutex_unlock( &mes_mutex );  
-    
-    /* Display period */
-    
-    period = mes.timestamp - ( (unsigned long long)last_time.tv_sec * 1000000000
-                             + (unsigned long long)last_time.tv_nsec );
-    last_time = current_time;
-    
-    flockfile( stderr );
-    fprintf( stderr, "rpit_socket_server_update: iteration period = %llu us.\n", period / 1000 );
-    funlockfile( stderr );
   }
   
   return NULL;
@@ -187,40 +177,18 @@ void *rpit_socket_server_update( void *ptr )  {
  */
 void rpit_socket_server_int_handler( int dummy )  {
   
-  /* Request termination of the thread */
-  
+  // Request termination of the thread
   exit_req = 1;
   
-  /* Wait for thread to terminate */
-  
+  // Wait for thread to terminate 
   pthread_join( mes_thread, NULL );
   
-  /* 
-   * 
-   * 
-   * Insert measurements cleanup code here.
-   * 
-   * 
-   * 
-   */
-  
-  
-  
-  
-  
-  
-  
-  
-  /**********************************************/
-  
-  /* Cleanup */
-  
+  // Cleanup
   flockfile( stderr );
-  fprintf( stderr, "\nrpit_socket_server_int_handler: measurement thread stopped. Cleaning up...\n" );
+  fprintf( stderr, "\nrpit_socket_server_int_handler: mainloop thread stopped. Cleaning up...\n" );
   funlockfile( stderr );
   
-  /* Exit */
-  
+  // Exit
   exit( EXIT_SUCCESS );
 }
 
@@ -238,43 +206,27 @@ int main( void )  {
   struct RPIt_socket_mes_struct  local_mes;
   struct RPIt_socket_con_struct  local_con;
   
-  /* 
-   * 
-   * 
-   * Insert measurements initialization code here 
-   * 
-   * 
-   * 
-   */
+  // VRPN initialization
+  vrpn_Connection *connection =  vrpn_get_connection_by_name( VRPN_SERVER_IP );
+
+  long my_id = connection->register_sender( VRPN_TARGET_NAME );
+  long my_type = connection->register_message_type( VRPN_TRACKER_TYPE );
   
-  
-  
-  
-  
-  
-  
-  
-  /**********************************************/
-  
-  
-  /* Initialize mutex */
-  
+  // Initialize mutex
   pthread_mutex_init( &mes_mutex, NULL );
   
-  /* Clear mes structure */
-  
+  // Clear mes structure
   mes.timestamp = 0;
   for ( i = 0; i < RPIT_SOCKET_MES_N; i++ )
     mes.mes[i] = 0.0;
   
-  /* Clear con structure */
-  
+  // Clear con structure
   con.magic = 0;
   con.timestamp = 0;
   for ( i = 0; i < RPIT_SOCKET_CON_N; i++ )
     con.con[i] = 0.0;
   
-  /* Initialize SIGINT handler */
+  // Initialize SIGINT handler
   
   signal( SIGINT, rpit_socket_server_int_handler );
   
@@ -307,38 +259,37 @@ int main( void )  {
     sfd = socket( rp->ai_family, rp->ai_socktype, rp->ai_protocol );
     if ( sfd == -1 )
       continue;
-
+    
+    // Success
     if ( bind( sfd, rp->ai_addr, rp->ai_addrlen ) == 0 )
-      break;                  /* Success */
+      break;
 
     close( sfd );
   }
-
-  if ( rp == NULL ) {          /* No address succeeded */
+  
+  // No address succeeded
+  if ( rp == NULL ) {
     flockfile( stderr );
     fprintf( stderr, "rpit_socket_server: could not bind. Aborting.\n" );
     funlockfile( stderr );
     exit( EXIT_FAILURE );
   }
 
-  freeaddrinfo( result );      /* No longer needed */ 
+  freeaddrinfo( result );
   
-  /* Start measurement thread */
-  
+  // Start measurement thread and VRPN main loop
+  connection->register_handler( my_type, rpit_vrpn_handler, (void*)"None", my_id );
   pthread_create( &mes_thread, NULL, rpit_socket_server_update, (void*) NULL );
   
-  /* Wait for control datagram and answer measurement to sender */
-
+  // Wait for control datagram and answer measurement to sender
   while ( 1 ) {
     
-    /* Read control signals from the socket */
-    
+    // Read control signals from the socket
     peer_addr_len = sizeof( struct sockaddr_storage );
     nread = recvfrom(  sfd, (char*)&local_con, sizeof( struct RPIt_socket_con_struct ), 0,
                       (struct sockaddr *)&peer_addr, &peer_addr_len );
     
-    /* Memcopy is faster than socket read: avoid holding the mutex too long */
-    
+    // Memcopy is faster than socket read: avoid holding the mutex too long
     pthread_mutex_lock( &mes_mutex );
     
     memcpy( &con, &local_con, sizeof( struct RPIt_socket_con_struct ) );
@@ -348,8 +299,7 @@ int main( void )  {
       fprintf( stderr, "rpit_socket_server: function recvfrom exited with error.\n" );
       funlockfile( stderr );
       
-      /* Clear control in case of error */
-      
+      // Clear control in case of error
       for ( i = 0; i < RPIT_SOCKET_CON_N; i++ )
         con.con[i] = 0.0;
     }
@@ -359,8 +309,7 @@ int main( void )  {
       fprintf( stderr, "rpit_socket_server: function recvfrom did not receive the expected packet size.\n" );
       funlockfile( stderr );
       
-      /* Clear control in case of error */
-      
+      // Clear control in case of error
       for ( i = 0; i < RPIT_SOCKET_CON_N; i++ )
         con.con[i] = 0.0;
     }
@@ -370,41 +319,19 @@ int main( void )  {
       fprintf( stderr, "rpit_socket_server: magic number problem. Expected %d but received %d.\n", RPIT_SOCKET_MAGIC, con.magic );
       funlockfile( stderr );
       
-      /* Clear control in case of error */
-      
+      // Clear control in case of error
       for ( i = 0; i < RPIT_SOCKET_CON_N; i++ )
         con.con[i] = 0.0;
     }
     
     pthread_mutex_unlock( &mes_mutex );
     
-    /*
-     * 
-     * 
-     *  Insert here the handling of control signals.
-     * 
-     * 
-     * 
-     */
-     
-     
-     
-     
-     
-     
-     
-     
-     
-    /**********************************************/
-    
-    /* Critical section : copy of the measurements to a local variable */
-    
+    // Critical section : copy of the measurements to a local variable
     pthread_mutex_lock( &mes_mutex );
     memcpy( &local_mes, &mes, sizeof( struct RPIt_socket_mes_struct ) );
     pthread_mutex_unlock( &mes_mutex );  
     
-    /* Send measurements to the socket */
-    
+    // Send measurements to the socket
     if ( sendto(  sfd, (char*)&local_mes, sizeof( struct RPIt_socket_mes_struct ), 0,
                   (struct sockaddr *)&peer_addr,
                   peer_addr_len) != sizeof( struct RPIt_socket_mes_struct ) )  {
