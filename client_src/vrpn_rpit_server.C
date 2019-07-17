@@ -44,6 +44,7 @@
 
 using namespace std;
 
+// Struct definitions
 struct RPIt_socket_mes_struct  {
   unsigned int        magic;                  // Magic number
   unsigned long long  timestamp;              // Absolute server time in ns 
@@ -56,11 +57,13 @@ struct RPIt_socket_con_struct  {
   double              con[RPIT_SOCKET_CON_N]; // Control signals
 };
 
+// Global variables
 pthread_t                       mes_thread;
 pthread_mutex_t                 mes_mutex;
 struct RPIt_socket_mes_struct   mes;
 struct RPIt_socket_con_struct   con;
 unsigned char                   exit_req = 0;
+vrpn_Connection                 *connection;
 
 /*
  *  rpit_socket_get_time : get current absolute time in ns
@@ -91,8 +94,6 @@ void rpit_socket_get_time( struct timespec *ts )  {
 int rpit_vrpn_handler( void *userdata, vrpn_HANDLERPARAM p ) {
   int                       i;
   const char                *param = (p.buffer);
-  vrpn_float64              pos[VRPN_TRANS_LEN], 
-                            quat[VRPN_ROT_LEN];
   static char               first_flag = 1;
   static unsigned long long first_time;
   unsigned long long        usec =  p.msg_time.tv_sec * 1e6 + 
@@ -146,8 +147,8 @@ int rpit_vrpn_handler( void *userdata, vrpn_HANDLERPARAM p ) {
   fprintf( stderr, 
     "Tracker : time us (%lli) pos (%lf,%lf,%lf) quat (%lf,%lf,%lf,%lf)\n",
     timestamp, 
-    pos[0], pos[1], pos[2],
-    quat[0], quat[1], quat[2], quat[3] );
+    mes.mes[0], mes.mes[1], mes.mes[2],
+    mes.mes[3], mes.mes[4], mes.mes[5], mes.mes[6] );
   funlockfile( stderr );
   
   return 0;
@@ -207,7 +208,7 @@ int main( void )  {
   struct RPIt_socket_con_struct  local_con;
   
   // VRPN initialization
-  vrpn_Connection *connection =  vrpn_get_connection_by_name( VRPN_SERVER_IP );
+  connection =  vrpn_get_connection_by_name( VRPN_SERVER_IP );
 
   long my_id = connection->register_sender( VRPN_TARGET_NAME );
   long my_type = connection->register_message_type( VRPN_TRACKER_TYPE );
