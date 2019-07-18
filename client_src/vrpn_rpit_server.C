@@ -139,6 +139,8 @@ int rpit_vrpn_handler( void *userdata, vrpn_HANDLERPARAM p ) {
       ntohd( *( (vrpn_float64*)( param+((4+i)*sizeof(vrpn_float64)) ) ) );
   }
   
+  mes.mes[VRPN_TRANS_LEN+VRPN_ROT_LEN] = timestamp * 1e-6;
+  
   // Exit critical section
   pthread_mutex_unlock( &mes_mutex );
 
